@@ -191,3 +191,96 @@
     (ok true)
   )
 )
+
+;; Stake STX tokens with optional time-lock for bonus rewards
+(define-public (stake-stx
+    (amount uint)
+    (lock-period uint)
+  )
+  (let ((current-position (default-to {
+      total-collateral: u0,
+      total-debt: u0,
+      health-factor: u0,
+      last-updated: u0,
+      stx-staked: u0,
+      analytics-tokens: u0,
+      voting-power: u0,
+      tier-level: u0,
+      rewards-multiplier: u100,
+    }
+      (map-get? UserPositions tx-sender)
+    )))
+    ;; Validation checks
+    (asserts! (is-valid-lock-period lock-period) ERR-INVALID-PROTOCOL)
+    (asserts! (not (var-get contract-paused)) ERR-PAUSED)
+    (asserts! (>= amount (var-get minimum-stake)) ERR-BELOW-MINIMUM)
+    ;; Execute STX transfer to contract
+    (try! (stx-transfer? amount tx-sender (as-contract tx-sender)))
+    ;; Calculate tier benefits and update positions
+    (let (
+        (new-total-stake (+ (get stx-staked current-position) amount))
+        (tier-info (get-tier-info new-total-stake))
+        (lock-multiplier (calculate-lock-multiplier lock-period))
+      )
+      ;; Create/Update staking position
+      (map-set StakingPositions tx-sender {
+        amount: amount,
+        start-block: stacks-block-height,
+        last-claim: stacks-block-height,
+        lock-period: lock-period,
+        cooldown-start: none,
+        accumulated-rewards: u0,
+      })
+      ;; Update user position with tier benefits
+      (map-set UserPositions tx-sender
+        (merge current-position {
+          stx-staked: new-total-stake,
+          tier-level: (get tier-level tier-info),
+          rewards-multiplier: (/ (* (get reward-multiplier tier-info) lock-multiplier) u100),
+          voting-power: new-total-stake,
+        })
+      )
+      ;; Update global STX pool
+      (var-set stx-pool (+ (var-get stx-pool) amount))
+      (ok true)
+    )
+  )
+)
+
+;; Begin unstaking process with security cooldown
+(define-public (initiate-unstake (amount uint))
+  (let (
+      (staking-position (unwrap! (map-get? StakingPositions tx-sender) ERR-NO-STAKE))
+      (current-amount (get amount staking-position))
+    )
+    ;; Validation checks
+    (asserts! (>= current-amount amount) ERR-INSUFFICIENT-STX)
+    (asserts! (is-none (get cooldown-start staking-position)) ERR-COOLDOWN-ACTIVE)
+    ;; Activate cooldown period
+    (map-set StakingPositions tx-sender
+      (merge staking-position { cooldown-start: (some stacks-block-height) })
+    )
+    (ok true)
+  )
+)
+
+;; Complete unstaking after cooldown period expires
+(define-public (complete-unstake)
+  (let (
+      (staking-position (unwrap! (map-get? StakingPositions tx-sender) ERR-NO-STAKE))
+      (cooldown-start (unwrap! (get cooldown-start staking-position) ERR-NOT-AUTHORIZED))
+      (stake-amount (get amount staking-position))
+    )
+    ;; Verify cooldown period has elapsed
+    (asserts! (>= (- stacks-block-height cooldown-start) (var-get cooldown-period))
+      ERR-COOLDOWN-ACTIVE
+    )
+    ;; Return STX to user
+    (try! (as-contract (stx-transfer? stake-amount tx-sender tx-sender)))
+    ;; Clean up user positions
+    (map-delete StakingPositions tx-sender)
+    ;; Update global pool
+    (var-set stx-pool (- (var-get stx-pool) stake-amount))
+    (ok true)
+  )
+)
