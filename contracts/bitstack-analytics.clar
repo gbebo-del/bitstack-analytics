@@ -391,3 +391,33 @@
 (define-read-only (get-user-position (user principal))
   (ok (map-get? UserPositions user))
 )
+
+;; Get user's staking details
+(define-read-only (get-staking-position (user principal))
+  (ok (map-get? StakingPositions user))
+)
+
+;; Get proposal details by ID
+(define-read-only (get-proposal (proposal-id uint))
+  (ok (map-get? Proposals { proposal-id: proposal-id }))
+)
+
+;; Get tier level configuration
+(define-read-only (get-tier-info-by-level (tier-level uint))
+  (ok (map-get? TierLevels tier-level))
+)
+
+;; Check if contract is paused
+(define-read-only (is-contract-paused)
+  (ok (var-get contract-paused))
+)
+
+;; Get current reward rates
+(define-read-only (get-reward-rates)
+  (ok {
+    base-rate: (var-get base-reward-rate),
+    bonus-rate: (var-get bonus-rate),
+    minimum-stake: (var-get minimum-stake),
+    cooldown-period: (var-get cooldown-period),
+  })
+)
